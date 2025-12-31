@@ -632,6 +632,7 @@ while running:
     screen.blit(hud_font.render(f"SCORE: {state['score']}", True, (255, 255, 255)), (10, 10))
     screen.blit(hud_font.render(f"LEVEL: {state['level']}", True, (255, 255, 255)), (WIDTH - 110, 10))
     screen.blit(hud_font.render("HP: " + "♥" * state["hp"], True, (255, 100, 100)), (10, HEIGHT - 30))
+    screen.blit(hud_font.render(f"STAGE: {state['stage']}", True, (255, 255, 255)), (WIDTH // 2 - 50, 10))
 
     y = 36
     if state["rapid_timer"] > 0:
