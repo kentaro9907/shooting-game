@@ -56,12 +56,18 @@ try:
     heal_sound = make_beep_sound(1040, 140, 0.35)
     explosion_sound = make_beep_sound(320, 140, 0.5)
     damage_sound = make_beep_sound(120, 400, 0.95)  # ★追加：低音「ボン」
+    # ★追加：ボス被弾（小さめ・低音・やや長め）
+    boss_hit_sound = make_beep_sound(200, 180, 0.75)
+
+    # ★追加：ボス撃破（さらに低音・長め・大きめ）
+    boss_die_sound = make_beep_sound(140, 260, 0.90)
+
     sound_ok = True
     
 except pygame.error:
     sound_ok = False
     shoot_sound = hit_sound = over_sound = enemy_shot_sound = powerup_sound = heal_sound = explosion_sound = None
-
+    boss_hit_sound = boss_die_sound = None
 def play(sound):
     if sound_ok and sound:
         sound.play()
@@ -146,6 +152,7 @@ def reset_game():
         "rapid_cooldown": 0,
         "spread_timer": 0,
         "pierce_timer": 0,
+        "win_timer": 0,   # ★ボス撃破後の待ち時間（フレーム）
     }
 
 def start_next_stage():
@@ -169,6 +176,7 @@ def start_next_stage():
     state["shot_cooldown"] = 0
     state["rapid_timer"] = 0
     state["rapid_cooldown"] = 0
+    state["win_timer"] = 0
     state["spread_timer"] = 0
     state["pierce_timer"] = 0
 
@@ -183,14 +191,16 @@ state = reset_game()
 stars = make_stars()
 
 player_speed = 6
-def add_explosion(x, y, big=False):
-    # big=True なら少し派手に
+def add_explosion(x, y, big=False, scale=1.0, life_scale=1.0):
     if big:
         max_r = 38
         life = 18
     else:
         max_r = 26
         life = 14
+
+    max_r = int(max_r * scale)
+    life = int(life * life_scale)
 
     state["explosions"].append({
         "x": int(x),
@@ -199,6 +209,7 @@ def add_explosion(x, y, big=False):
         "max_r": float(max_r),
         "life": int(life),
     })
+
 
 # =====================
 # 弾生成
@@ -296,8 +307,21 @@ while running:
 
     # -------- 更新 --------
 
+    # ★勝利演出中：タイマーだけ減らす（操作・敵生成などは停止）
+    if (not state["game_over"]) and state.get("win_timer", 0) > 0:
+        state["win_timer"] -= 1
+        if state["win_timer"] <= 0:
+            state["win"] = True
 
-    if (not state["game_over"]) and (not state.get("win", False)):
+    # 爆発エフェクト更新
+    for ex in state["explosions"][:]:
+        ex["r"] += 2.5          # 半径を増やす（分かりやすく固定増加に）
+        ex["life"] -= 1
+        if ex["life"] <= 0:
+            state["explosions"].remove(ex)
+
+    if (not state["game_over"]) and (not state.get("win", False)) and state.get("win_timer", 0) == 0:
+
 
         # タイマー減少
         if state["rapid_timer"] > 0:
@@ -440,13 +464,7 @@ while running:
             if pu["rect"].top > HEIGHT:
                 state["powerups"].remove(pu)
        
-        # 爆発エフェクト更新
-        for ex in state["explosions"][:]:
-            ex["r"] += 2.5          # 半径を増やす（分かりやすく固定増加に）
-            ex["life"] -= 1
-            if ex["life"] <= 0:
-                state["explosions"].remove(ex)
-
+        
         # 衝突（弾→敵）HP制の敵に対応
         for enemy in state["enemies"][:]:
             rect = enemy["rect"]
@@ -486,18 +504,32 @@ while running:
             br = state["boss"]["rect"]
             for b in state["bullets"][:]:
                 if br.colliderect(b["rect"]):
+
+                    # ★被弾エフェクト（小）：当たった位置に出す
+                    add_explosion(b["rect"].centerx, b["rect"].centery, big=False)
+                    play(boss_hit_sound)
+
                     state["boss"]["hp"] -= 1
-                    play(hit_sound)
 
                     if not b["pierce"]:
                         state["bullets"].remove(b)
 
-                    # ボス撃破
+                    # ★ボス撃破（大）
                     if state["boss"]["hp"] <= 0:
-                        add_explosion(br.centerx, br.centery, big=True)
-                        play(explosion_sound)
+                        for _ in range(6):
+                            ox = random.randint(-40, 40)
+                            oy = random.randint(-15, 15)
+                            add_explosion(
+                                br.centerx + ox,
+                                br.centery + oy,
+                                big=False,
+                                scale=1.3,
+                                life_scale=12.0   # ★14*12=168フレーム ≒ 2.8秒
+                            )
+
+                        play(boss_die_sound)
+                        state["win_timer"] = WIN_DELAY
                         state["score"] += 300 + state["hp"] * 50
-                        state["win"] = True
                         state["enemies"].clear()
                         state["enemy_bullets"].clear()
                         state["powerups"].clear()
@@ -506,6 +538,7 @@ while running:
                         state["boss"] = None
 
                     break  # 当たった弾があった場合のみ、その1発で処理終了
+
 
 
         # 被弾処理
@@ -552,8 +585,7 @@ while running:
                     play(powerup_sound)
                 else:
                     # HEAL
-                    if state["hp"] < MAX_HP:
-                        state["hp"] += 1
+                    state["hp"] += 1
                     play(heal_sound)
 
     # -------- 描画 --------
@@ -659,3 +691,4 @@ while running:
 
 pygame.quit()
 sys.exit()
+
