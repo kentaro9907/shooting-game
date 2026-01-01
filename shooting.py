@@ -45,7 +45,9 @@ clock = pygame.time.Clock()
 
 font = pygame.font.Font(None, 48)
 small_font = pygame.font.Font(None, 28)
-hud_font = pygame.font.Font(None, 28)
+hud_font = pygame.font.Font(r"C:\Windows\Fonts\arial.ttf", 20)
+hp_font  = pygame.font.Font(r"C:\Windows\Fonts\arial.ttf", 20)  # ← HP専用
+
 
 try:
     shoot_sound = make_beep_sound(880, 60, 0.35)
@@ -269,9 +271,20 @@ def enemy_score_value(enemy):
         return 15
     return 10
 
+# =====================
+# ボス降下（左右は維持しつつ、一定時間後に徐々に降りる）
+# =====================
+BOSS_DESCEND_DELAY = FPS * 10         # 3秒後に降下開始（好みで調整）
+BOSS_DESCEND_MAX_Y = int(HEIGHT * 0.55)  # 画面中央あたりで停止
+BOSS_DESCEND_ACCEL = 0.01            # 徐々に加速（0.03〜0.08推奨）
+BOSS_DESCEND_VY_MAX = 1.0            # 最大降下速度（1.5〜3.0推奨）
+
+
+
+
 def spawn_boss():
     rect = pygame.Rect(WIDTH//2 - BOSS_W//2, 80, BOSS_W, BOSS_H)
-    return {"rect": rect, "hp": BOSS_HP_MAX, "dir": 1, "timer": 0}
+    return {"rect": rect, "hp": BOSS_HP_MAX, "dir": 1, "timer": 0,"vy": 0.0}
 
 # =====================
 # メインループ
@@ -429,19 +442,28 @@ while running:
                 chance *= 1.5
 
             if random.random() < chance:
-                eb = pygame.Rect(rect.centerx - EB_W//2, rect.bottom, EB_W, EB_H)
-                state["enemy_bullets"].append(eb)
+                eb_rect = pygame.Rect(rect.centerx - EB_W//2, rect.bottom, EB_W, EB_H)
+                state["enemy_bullets"].append({"rect": eb_rect, "vx": 0, "vy": ENEMY_BULLET_SPEED})
+
                 play(enemy_shot_sound)
 
         # 敵弾移動
         for eb in state["enemy_bullets"][:]:
-            eb.y += ENEMY_BULLET_SPEED
-            if eb.top > HEIGHT:
+            eb["rect"].x += eb["vx"]
+            eb["rect"].y += eb["vy"]
+            if eb["rect"].top > HEIGHT or eb["rect"].right < 0 or eb["rect"].left > WIDTH:
                 state["enemy_bullets"].remove(eb)
+
         # ボス更新
         if state["boss_active"] and state["boss"] and (not state.get("win", False)):
             br = state["boss"]["rect"]
             state["boss"]["timer"] += 1
+
+            # ---- ボスの徐々に降下（左右移動は維持）----
+            if state["boss"]["timer"] >= BOSS_DESCEND_DELAY and br.y < BOSS_DESCEND_MAX_Y:
+                state["boss"]["vy"] = min(state["boss"]["vy"] + BOSS_DESCEND_ACCEL, BOSS_DESCEND_VY_MAX)
+                br.y = min(br.y + state["boss"]["vy"], BOSS_DESCEND_MAX_Y)
+
 
             # 左右移動
             br.x += BOSS_SPEED * state["boss"]["dir"]
@@ -449,14 +471,33 @@ while running:
                 state["boss"]["dir"] *= -1
 
             # 3-way発射（enemy_bullets を流用）
-            if state["boss"]["timer"] % BOSS_SHOOT_INTERVAL == 0:
-                # 中央・左・右の3本
-                for vx in (0, -2, 2):
-                    eb = pygame.Rect(br.centerx - EB_W//2, br.bottom, EB_W, EB_H)
-                    # enemy_bullets は Rect だけなので、vx対応したい場合は別管理が必要
-                    # まずPhase1は直下のみ（vx無し）にする
-                    state["enemy_bullets"].append(eb)
+                        # ---- ボスの攻撃強化：ステージ後半のレベルに同期 ----
+            boss_bullet_speed = ENEMY_BULLET_SPEED + (level - 1) * 0.0   # 係数は好みで調整
+            boss_interval = max(24, BOSS_SHOOT_INTERVAL + 10 - (level - 1) * 1)  # レベルが上がるほど連射
+
+            # 3-way発射（vxあり）
+            if state["boss"]["timer"] % boss_interval == 0:
+                vxs = (-2, 2) if state["stage"] == 1 else (-2, 0, 2)
+                for vx in vxs:
+
+                    eb_rect = pygame.Rect(br.centerx - EB_W//2, br.bottom, EB_W, EB_H)
+                    state["enemy_bullets"].append({"rect": eb_rect, "vx": vx, "vy": boss_bullet_speed})
                 play(enemy_shot_sound)
+
+            # 低頻度の狙い撃ち（緊張感を維持）
+            if state["boss"]["timer"] % 180 == 0:  # 3秒ごと（FPS=60想定）
+                px, py = state["player"].centerx, state["player"].centery
+                sx, sy = br.centerx, br.bottom
+                dx, dy = (px - sx), (py - sy)
+                dist = max(1.0, math.hypot(dx, dy))
+                aimed_speed = boss_bullet_speed + 0.1
+                vx = int(dx / dist * aimed_speed)
+                vy = int(dy / dist * aimed_speed)
+
+                eb_rect = pygame.Rect(sx - EB_W//2, sy, EB_W, EB_H)
+                state["enemy_bullets"].append({"rect": eb_rect, "vx": vx, "vy": vy})
+                play(enemy_shot_sound)
+
 
         # パワーアップ移動
         for pu in state["powerups"][:]:
@@ -480,7 +521,6 @@ while running:
                     # 倒したらスコア・ドロップ
                     if enemy["hp"] <= 0:
                         state["enemies"].remove(enemy)
-                        state["score"] += enemy_score_value(enemy)
                         gain = enemy_score_value(enemy)
                         state["score"] += gain
                         state["stage_score"] += gain
@@ -562,12 +602,12 @@ while running:
                     break
 
         # 衝突（自機←敵弾）
-        if state["invincible"] == 0 and (not state["game_over"]):
             for eb in state["enemy_bullets"][:]:
-                if eb.colliderect(state["player"]):
+                if eb["rect"].colliderect(state["player"]):
                     state["enemy_bullets"].remove(eb)
                     take_damage()
                     break
+
 
         # 衝突（自機←パワーアップ）
         for pu in state["powerups"][:]:
@@ -646,7 +686,8 @@ while running:
 
     # 敵弾
     for eb in state["enemy_bullets"]:
-        draw_rect_or_img(eb, enemy_bullet_img, (255, 255, 0))
+        draw_rect_or_img(eb["rect"], enemy_bullet_img, (255, 255, 0))
+
 
     # パワーアップ
     for pu in state["powerups"]:
@@ -663,7 +704,7 @@ while running:
     # HUD
     screen.blit(hud_font.render(f"SCORE: {state['score']}", True, (255, 255, 255)), (10, 10))
     screen.blit(hud_font.render(f"LEVEL: {state['level']}", True, (255, 255, 255)), (WIDTH - 110, 10))
-    screen.blit(hud_font.render("HP: " + "♥" * state["hp"], True, (255, 100, 100)), (10, HEIGHT - 30))
+    screen.blit(hp_font.render("HP: " + "♥" * state["hp"], True, (255, 100, 100)), (10, HEIGHT - 30))
     screen.blit(hud_font.render(f"STAGE: {state['stage']}", True, (255, 255, 255)), (WIDTH // 2 - 50, 10))
 
     y = 36
